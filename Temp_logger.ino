@@ -172,6 +172,7 @@ char *printTenth(uint32_t in)
 	}
 	outbuf[i++] = '.';
 	outbuf[i++] = tempbuf[0];
+	outbuf[i++] = 0;
 	return outbuf;
 }
 
@@ -179,7 +180,6 @@ char *printTenth(uint32_t in)
 void printPlotlyTable(WiFiClient &client)
 {
 	int i;
-	uint32_t accu;
 	const uint32_t timeitv = MEAS_INTERVAL * 1000/3600;
 	client.println("<!-- Load plotly.js into the DOM -->");
 	client.println("<script src='https://cdn.plot.ly/plotly-latest.min.js'></script>");
@@ -189,10 +189,8 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("var trace1 = {");
 	client.print("x:[");
 	
-	accu = 0;
 	for (i = 0; i < vDataArrayIdx; i++) {
-		accu = i * timeitv;
-		client.print(printMilli(accu));
+		client.print(printMilli(i * timeitv));
 		client.print(",");
 	}
 	client.println("],");
@@ -209,10 +207,8 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("var trace2 = {");
 	client.print("x:[");
 
-	accu = 0;
 	for (i = 0; i < vDataArrayIdx; i++) {
-		accu = i * timeitv;
-		client.print(printMilli(accu));
+		client.print(printMilli(i * timeitv));
 		client.print(",");
 	}
 	client.println("],");
@@ -229,10 +225,8 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("var trace3 = {");
 	client.print("x:[");
 
-	accu = 0;
 	for (i = 0; i < vDataArrayIdx; i++) {
-		accu = i * timeitv;
-		client.print(printMilli(accu));
+		client.print(printMilli(i * timeitv));
 		client.print(",");
 	}
 	client.println("],");
@@ -249,10 +243,8 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("var trace4 = {");
 	client.print("x:[");
 
-	accu = 0;
 	for (i = 0; i < vDataArrayIdx; i++) {
-		accu = i * timeitv;
-		client.print(printMilli(accu));
+		client.print(printMilli(i * timeitv));
 		client.print(",");
 	}
 	client.println("],");
@@ -444,6 +436,20 @@ void printSettingsPage(WiFiClient &client)
 	client.println("<body><h1>Data Capture configurations</h1>");
 
 	client.println("<form action='/config' method='get'>");
+
+	client.print("WiFi SSID: <input type='text' name='ssidSet' value='");
+	client.print(Wifissid);
+	client.println("'> <br>");
+	client.print("WiFi Password:  <input type='text' name='wifipassSet'");
+	client.println("'> <br>");
+
+	client.println("<input type='submit' value='Update WiFi Settings'>");
+	client.println("</form>");
+	client.println("<br>");
+	client.println("<br>");
+
+	client.println("<form action='/config' method='get'>");
+
 	client.println("Run State: <br>");
 	if (runState == RUN_STATE_STOP || runState == RUN_STATE_END) {
 		client.println("<input type='radio' name='runStartSet' value='0' checked> Stopped<br>");
@@ -456,7 +462,7 @@ void printSettingsPage(WiFiClient &client)
 		client.println("<input type='radio' name='runStartSet' value='1'> Run capture<br>");
 	}
 	client.println("<input type='radio' name='runStartSet' value='3' > Reset<br>");
-	client.println("<input type='submit' value='Submit'>");
+	client.println("<input type='submit' value='Set run state'>");
 	client.println("</form>");
 	client.println("</body></html>");
 	
@@ -523,9 +529,9 @@ void runSingleCheck ()
 	//vArray[vArrayIdx] = vSense;
 	//iArray[vArrayIdx] = iSense;
 	t0Array[vDataArrayIdx] = temp0C;
-	t0Array[vDataArrayIdx] = temp1C;
-	t0Array[vDataArrayIdx] = temp2C;
-	t0Array[vDataArrayIdx] = temp3C;
+	t1Array[vDataArrayIdx] = temp1C;
+	t2Array[vDataArrayIdx] = temp2C;
+	t3Array[vDataArrayIdx] = temp3C;
 	vDataArrayIdx++;
 }
 
@@ -534,8 +540,42 @@ void runSingleCheck ()
 void processUrlCommands(String &header)
 {
 	int idxRunStart = header.indexOf("runStartSet=");
+	int idxWifissid = header.indexOf("ssidSet=");
+	int idxWifipass = header.indexOf("wifipassSet=");
 
 	// Process the form data and update internal variables
+	// idxWifissid
+	if (idxWifissid >= 0) {
+		String s = header.substring(idxWifissid + 8, idxWifissid + 8 + 20);
+		int i = s.indexOf("&");
+		s = s.substring(0, i);
+		Serial.print("Wifi SSID set ");
+		Serial.println(s);
+
+		for (i=0;i<WIFI_SSID_SIZE;i++) {
+			 EEPROM.write(i + WIFI_SSID_OFFSET, s.charAt(i));
+			 if (s.charAt(i) == 0) break;
+		}
+	}
+
+	// idxWifipass
+	if (idxWifipass >= 0) {
+		String s = header.substring(idxWifipass + 12, idxWifipass + 12 + 20);
+		int i = s.indexOf(" ");
+		s = s.substring(0, i);
+		Serial.print("Wifi PASSWD set ");
+		Serial.println(s);
+
+		// Remember the Wifi information
+		for (i=0;i<WIFI_PASS_SIZE;i++) {
+			 EEPROM.write(i + WIFI_PASS_OFFSET, s.charAt(i));
+			 if (s.charAt(i) == 0) break;
+		}
+#ifdef USE_CONFIG_UI_WIFI
+		EEPROM.commit();
+#endif
+	}
+
 	// isRunStart
 	if (idxRunStart >= 0) {
 		int newRunStart;
@@ -683,7 +723,7 @@ void setup()
 
 	// Store default ssid/password
 	// Use this till Wifi Configuration interface is added
-#if 0
+#ifdef USE_SET_DEFAULT_WIFI
 	{
 		int i;
 		const char *defssid = DEFAULT_WIFI_SSID;

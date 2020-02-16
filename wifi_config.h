@@ -19,4 +19,12 @@
 #define DEFAULT_WIFIAP_SSID      "BattTester"
 #define DEFAULT_WIFIAP_PASSWD    "Batteries"
 
+// Uncomment the following define if you want to force the WiFi information
+// to be set at every boot up
+//#define USE_SET_DEFAULT_WIFI
+//
+// Uncomment the following define if you want to use the configuration
+// UI to update the WiFi information
+#define USE_CONFIG_UI_WIFI
+
 #endif
