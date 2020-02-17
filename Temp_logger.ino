@@ -37,10 +37,10 @@
 #define ADC_11DB_VAR_B		1220
 
 // PIN config
-#define PIN_TAN0				35	   		// Thermistor, 
+#define PIN_TAN0				33	   		// Thermistor, 
 #define PIN_TAN1				32    		// Thermistor,
-#define PIN_TAN2				33	   		// Thermistor, 
-#define PIN_TAN3				34    		// Thermistor,
+#define PIN_TAN2				34	   		// Thermistor, 
+#define PIN_TAN3				35    		// Thermistor,
 #define PIN_V1					33    		// Voltage, 11:1 divider
 #define PIN_CUR				34				// Current
 #define TIMER_TICK_PIN		12				// For debugging
@@ -97,6 +97,7 @@ int16_t t3Array[10000];						// Temp3 reading over time
 
 int vDataArrayIdx;							// Current head of the data array
 TaskHandle_t xDataTestHandle = NULL;	// Handle to data capture test task
+int wifiApMode = 0;							// Using AP mode?
 
 // ********************************************
 // Function prototypes
@@ -181,80 +182,93 @@ void printPlotlyTable(WiFiClient &client)
 {
 	int i;
 	const uint32_t timeitv = MEAS_INTERVAL * 1000/3600;
+	String s;
 	client.println("<!-- Load plotly.js into the DOM -->");
 	client.println("<script src='https://cdn.plot.ly/plotly-latest.min.js'></script>");
 	client.println("<script>");
  
 	// Trace 1 - Temperature over time
 	client.println("var trace1 = {");
-	client.print("x:[");
-	
-	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printMilli(i * timeitv));
-		client.print(",");
-	}
-	client.println("],");
-	client.print("y:[");
 
+	s = "x:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printTenth(t0Array[i]));
-		client.print(",");
+		s += printMilli(i * timeitv);
+		s += ",";
 	}
-	client.println("],");
+	s += "],";
+	client.println(s);
+
+	s = "y:[";
+	for (i = 0; i < vDataArrayIdx; i++) {
+		s += printTenth(t0Array[i]);
+		s += ",";
+	}
+	s += "],";
+	client.println(s);
+
 	client.println("type: 'scatter'};");
 
 	// Trace 2 - Temperature over time
 	client.println("var trace2 = {");
-	client.print("x:[");
 
+	s = "x:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printMilli(i * timeitv));
-		client.print(",");
+		s += printMilli(i * timeitv);
+		s += ",";
 	}
-	client.println("],");
-	client.print("y:[");
+	s += "],";
+	client.println(s);
 
+	s = "y:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printTenth(t1Array[i]));
-		client.print(",");
+		s += printTenth(t1Array[i]);
+		s += ",";
 	}
-	client.println("],");
+	s += "],";
+	client.println(s);
+
 	client.println("type: 'scatter'};");
 
 	// Trace 3 - Temperature over time
 	client.println("var trace3 = {");
-	client.print("x:[");
 
+	s = "x:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printMilli(i * timeitv));
-		client.print(",");
+		s += printMilli(i * timeitv);
+		s += ",";
 	}
-	client.println("],");
-	client.print("y:[");
+	s += "],";
+	client.println(s);
 
+	s = "y:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printTenth(t2Array[i]));
-		client.print(",");
+		s += printTenth(t2Array[i]);
+		s += ",";
 	}
-	client.println("],");
+	s += "],";
+	client.println(s);
+
 	client.println("type: 'scatter'};");
 
 	// Trace 2 - Temperature over time
 	client.println("var trace4 = {");
-	client.print("x:[");
 
+	s = "x:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printMilli(i * timeitv));
-		client.print(",");
+		s += printMilli(i * timeitv);
+		s += ",";
 	}
-	client.println("],");
-	client.print("y:[");
+	s += "],";
+	client.println(s);
 
+	s = "y:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(printTenth(t3Array[i]));
-		client.print(",");
+		s += printTenth(t3Array[i]);
+		s += ",";
 	}
-	client.println("],");
+	s += "],";
+	client.println(s);
+
 	client.println("type: 'scatter'};");
 
 	// Trace 1 function
@@ -294,16 +308,17 @@ void printCsvData(WiFiClient &client)
 	int i;
 	client.println("Time, T0, T1, T2, T3");
 	for (i = 0; i < vDataArrayIdx; i++) {
-		client.print(i * MEAS_INTERVAL);
-		client.print(",  ");
-		client.print((float)t0Array[i] / 10);
-		client.print(",  ");
-		client.print((float)t1Array[i] / 10);
-		client.print(",  ");
-		client.print((float)t2Array[i] / 10);
-		client.print(",  ");
-		client.print((float)t3Array[i] / 10);
-		client.println("");
+		String s = "";
+		s += (i * MEAS_INTERVAL);
+		s += ",";
+		s += printTenth(t0Array[i]);
+		s += ",";
+		s += printTenth(t1Array[i]);
+		s += ",";
+		s += printTenth(t2Array[i]);
+		s += ",";
+		s += printTenth(t3Array[i]);
+		client.println(s);
 	}
 }
 
@@ -486,9 +501,9 @@ int convVoltageToTemp(int mV)
 void updateAdcReadings() 
 {
 	int sensorValue;
+#if 0
 	analogSetPinAttenuation(PIN_V1, ADC_0db);
 	analogSetPinAttenuation(PIN_CUR, ADC_6db);
-#if 0
 	sensorValue = analogRead(PIN_V1);
 	sensorValue += analogRead(PIN_V1);
 	sensorValue += analogRead(PIN_V1);
@@ -607,11 +622,24 @@ void processUrlCommands(String &header)
 // Web server thread
 void webServerProcess(void *id) 
 {
+	int reconnect_retry = 10;
 	while (1) {
 		int isCaptureHeader = 1;
 		String header = "";								// HTTP header
 		WiFiClient client = server.available();   // Listen for incoming clients
 		g_wdt_cnt = 0;
+
+		if(!wifiApMode) {
+			while (WiFi.status() != WL_CONNECTED) {	
+				// Disconnect happened, try to reconnect
+				if (reconnect_retry == 0) {
+					WiFi.begin(Wifissid, Wifipassword);
+					reconnect_retry = 10;
+				}
+				delay(500);
+				reconnect_retry--;
+			}
+		}
 
 		if (client) {
 			Serial.println("New Client.");			// Client connected
@@ -747,7 +775,8 @@ void setup()
 		 Wifipassword[i] = EEPROM.read(i + WIFI_PASS_OFFSET);
 	}
 	
-	if (digitalRead(AP_MODE_PIN)) {
+	wifiApMode = !(digitalRead(AP_MODE_PIN));
+	if (!wifiApMode) {
 		// Connect to Wi-Fi network with SSID and password
 		Serial.print("Connecting to ");
 		Serial.println(Wifissid);
