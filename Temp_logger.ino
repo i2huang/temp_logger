@@ -428,6 +428,26 @@ void printCsvPage(WiFiClient &client)
 	client.println();
 }
 
+void printPostResponse(WiFiClient &client)
+{
+	// HTTP headers start with a response code (e.g. HTTP/1.1 200 OK)
+	client.println("HTTP/1.1 200 OK");
+	client.println("Content-type:text/html");
+	client.println("Connection: close");
+	client.println();
+	// HTML page header
+	client.println("<!DOCTYPE html><html>");
+
+	// Core of the webpage
+	client.println("<body>");
+
+	// Loop through the output array and display 
+	client.println("Configuration updated.");
+	
+	// The HTTP response ends with another blank line
+	client.println();
+}
+
 // ********************************************
 // Settings page generation
 void printSettingsPage(WiFiClient &client)
@@ -450,8 +470,7 @@ void printSettingsPage(WiFiClient &client)
 	// Core of the webpage
 	client.println("<body><h1>Data Capture configurations</h1>");
 
-	client.println("<form action='/config' method='get'>");
-
+	client.println("<form action='/config' method='post'>");
 	client.print("WiFi SSID: <input type='text' name='ssidSet' value='");
 	client.print(Wifissid);
 	client.println("'> <br>");
@@ -463,7 +482,7 @@ void printSettingsPage(WiFiClient &client)
 	client.println("<br>");
 	client.println("<br>");
 
-	client.println("<form action='/config' method='get'>");
+	client.println("<form action='/config' method='post'>");
 
 	client.println("Run State: <br>");
 	if (runState == RUN_STATE_STOP || runState == RUN_STATE_END) {
@@ -625,7 +644,10 @@ void webServerProcess(void *id)
 	int reconnect_retry = 10;
 	while (1) {
 		int isCaptureHeader = 1;
+		int isCapturePostMsg = 0;
+		int isWaitPkt = 0;
 		String header = "";								// HTTP header
+		String postmsg = "";								// HTTP POST body
 		WiFiClient client = server.available();   // Listen for incoming clients
 		g_wdt_cnt = 0;
 
@@ -645,34 +667,66 @@ void webServerProcess(void *id)
 			Serial.println("New Client.");			// Client connected
 			int currentLine = 0;
 			while (client.connected()) {           // loop while the client's connected
-				if (g_wdt_cnt >= 5) {					// 5s connection timeout
+				if (g_wdt_cnt >= 10) {					// 10s connection timeout
 					Serial.println("Connection timeout");	
 					break;
 				}
 				if (client.available()) {           // Read any available byte and store it
+					if (isWaitPkt == 0) {
+						Serial.print("Client available: ");
+						Serial.println(client.available());
+					}
+					isWaitPkt = 1;
 					g_wdt_cnt = 0;
 					char c = client.read();
 					//Serial.write(c);               // Debug loopback
 					if (isCaptureHeader) 
 						header += c;
-
-					if (c == '\n') {                 // if the byte is a newline character
-						// if the current line is blank, you got two newline characters in a row.
-						// that's the end of the client HTTP request, so send a response:
+					if (isCapturePostMsg)
+						postmsg += c;
+					// Quick detection of different part of the packet
+					// If there is one empty line, that's end of the header 
+					if (c == '\n') {
 						if (currentLine == 0) {
-							// Capture the time at start, profile page generation time
-							TickType_t start_t, end_t;
-							start_t = xTaskGetTickCount();
+							//isCaptureHeader = 0;
+							isCapturePostMsg = 1;
+							isCaptureHeader = 0;
+						}
+						currentLine = 0;
+					}
+					else if (c != '\r') {
+						currentLine++;
+					}
+				}
+				else {
+					if (isWaitPkt == 1 && isCapturePostMsg) {
+						isCapturePostMsg = 0;
+						Serial.print("POST MSG: ");
+						Serial.println(postmsg);			// Print out the HTTP heade
+					}
+					if (isWaitPkt == 1) {
+						TickType_t start_t, end_t;
+						// If no more data to receive, process the packet received
 
-							Serial.println(header);			// Print out the HTTP heade
+						// Packet is done, check the content of the packet
+						// Capture the time at start, profile page generation time
+						Serial.println(header);			// Print out the HTTP heade
 
-							// Locate all the keywords
-							int idxStatusHtml = header.indexOf("status"); 
-							int idxConfigHtml = header.indexOf("config"); 
-							int idxCsvHtml = header.indexOf("csv"); 
-							
+						start_t = xTaskGetTickCount();
+
+						// Locate all the keywords
+						int idxStatusHtml = header.indexOf("status"); 
+						int idxConfigHtml = header.indexOf("config"); 
+						int idxCsvHtml = header.indexOf("csv"); 
+						int idxPOST = header.indexOf("POST"); 
+						int idxGET = header.indexOf("GET"); 
+						if (idxPOST == 0) {
+							// Message is POST, print response and capture commands
+							printPostResponse(client);
+							processUrlCommands(postmsg);
+						}
+						else if (idxGET == 0) {
 							if (idxConfigHtml >= 0) {
-								processUrlCommands(header);
 								printSettingsPage(client);
 							}
 							else if (idxStatusHtml >= 0) {
@@ -690,14 +744,16 @@ void webServerProcess(void *id)
 							Serial.print("Page load time: ");
 							Serial.print((end_t - start_t) * portTICK_PERIOD_MS);
 							Serial.println("mS");
-							break;
-						} else { // if you got a newline, then clear currentLine
-							isCaptureHeader = 0;
-							currentLine = 0;
 						}
-					} else if (c != '\r') {  
-						currentLine++;			// If not '\r', increase currentLine
+						// Close the connection to indicate page is complete
+						isCaptureHeader = 1;
+						header = "";
+						postmsg = "";
+						break;
 					}
+					// No data to receive, waiting
+					isWaitPkt = 0;
+					taskYIELD();
 				}
 			}
 			// Close the connection
