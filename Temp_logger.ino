@@ -29,12 +29,13 @@
 #define MAX_VBATT_SYSTEM   24000			// Maximum battery voltage supported by system
 
 // ADC calibration 
+#define DEVICE_CORRECTION  1.063
 #define ADC_0DB_VAR_A		77				// VAR_A = Offset, VAR_B = Slope
-#define ADC_0DB_VAR_B		4153
+#define ADC_0DB_VAR_B		(4153 * DEVICE_CORRECTION)
 #define ADC_6DB_VAR_A		110
-#define ADC_6DB_VAR_B		2270
+#define ADC_6DB_VAR_B		(2270 * DEVICE_CORRECTION)
 #define ADC_11DB_VAR_A		150
-#define ADC_11DB_VAR_B		1220
+#define ADC_11DB_VAR_B		(1220 * DEVICE_CORRECTION)
 
 // PIN config
 #define PIN_TAN0				33	   		// Thermistor, 
@@ -183,13 +184,18 @@ char *printTenth(int16_t in)
 void printTempPlotData(WiFiClient &client, int16_t *aData)
 {
 	int i;
-	const uint32_t timeitv = MEAS_INTERVAL * 1000/3600;
+	uint32_t timeitv = MEAS_INTERVAL * 1000/3600;
+	// Display in hours if duration exceed 1 hour
+	int isDisplayHour = vDataArrayIdx > (3600 / MEAS_INTERVAL);
 
 	String s = "x:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
 		// Detect a disconnected probe, only plot of value is in range
 		if (aData[i] != CONST_INVALID_TEMP) {
-			s += printMilli(i * timeitv);
+			if (isDisplayHour) 
+				s += printMilli(i * timeitv);
+			else 
+				s += (i * MEAS_INTERVAL) / 60;
 			s += ",";
 		}
 	}
@@ -212,6 +218,8 @@ void printPlotlyTable(WiFiClient &client)
 {
 	int i;
 	String s;
+	int isDisplayHour = vDataArrayIdx > (3600 / MEAS_INTERVAL);
+
 	client.println("<!-- Load plotly.js into the DOM -->");
 	client.println("<script src='https://cdn.plot.ly/plotly-latest.min.js'></script>");
 	client.println("<script>");
@@ -240,9 +248,12 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("function plot_tempDiv() {");
 	client.println("  var data = [trace1, trace2];");
 	client.println("  var layout = {");
-	client.println("    title: 'Temperature over time',");
+	client.println("    title: 'Temperature',");
 	client.println("    xaxis: {");
-	client.println("      title: 'Time (h)',");
+	if (isDisplayHour)
+		client.println("      title: 'Time (h)',");
+	else 
+		client.println("      title: 'Time (min)',");
 	client.println("      zeroline: false");
 	client.println("    },");
 	client.println("    yaxis: {");
@@ -255,9 +266,12 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("function plot_atempDiv() {");
 	client.println("  var data = [trace3, trace4];");
 	client.println("  var layout = {");
-	client.println("    title: 'Temperature over time',");
+	client.println("    title: 'Temperature',");
 	client.println("    xaxis: {");
-	client.println("      title: 'Time (h)',");
+	if (isDisplayHour)
+		client.println("      title: 'Time (h)',");
+	else 
+		client.println("      title: 'Time (min)',");
 	client.println("      zeroline: false");
 	client.println("    },");
 	client.println("    yaxis: {");
@@ -498,10 +512,18 @@ int convVoltageToTempPb7(int mV)
 		return CONST_INVALID_TEMP;
 	}
 
-	Rt = 50000.0 / (3300.0 / mV - 1.0);
-	lgrt = log(Rt/1000);
+	Rt = 50.0 / (3300.0 / mV - 1.0);
+	lgrt = log(Rt);
 	Temp = 447 - 31.1 * lgrt + 0.105 * pow(lgrt, 3);
-	Temp = Temp - 273.2;
+	Temp = Temp - 273.15;
+
+	/* Printout used for calibration *
+	Serial.print("Vin: ");
+	Serial.println(mV);
+	Serial.print("Rt: ");
+	Serial.println(Rt);
+	Serial.print("Temp: ");
+	Serial.println(Temp); */
 
 	return (Temp * 10);
 }
