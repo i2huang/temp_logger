@@ -63,6 +63,8 @@
 #define WIFI_PASS_OFFSET   20
 #define WIFI_PASS_SIZE     20
 
+#define CONST_INVALID_TEMP -5000			// -500C, not a valid temperature range
+
 // ********************************************
 // Wifi network credentials
 char Wifissid[20];
@@ -160,12 +162,13 @@ char *printMilli(uint32_t in)
 }
 
 // Convert x10 number into x1 with decimal point
-char *printTenth(uint32_t in)
+char *printTenth(int16_t in)
 {
 	static char outbuf[20];
 	char tempbuf[10]; 
 	int frac, i;
 	frac = in%10;
+	frac = frac < 0 ? -frac : frac;		// ads
 	itoa(in/10, outbuf, 10);
 	itoa(frac, tempbuf, 10);
 	for (i=0;i<sizeof(outbuf);i++) {
@@ -177,11 +180,37 @@ char *printTenth(uint32_t in)
 	return outbuf;
 }
 
+void printTempPlotData(WiFiClient &client, int16_t *aData)
+{
+	int i;
+	const uint32_t timeitv = MEAS_INTERVAL * 1000/3600;
+
+	String s = "x:[";
+	for (i = 0; i < vDataArrayIdx; i++) {
+		// Detect a disconnected probe, only plot of value is in range
+		if (aData[i] != CONST_INVALID_TEMP) {
+			s += printMilli(i * timeitv);
+			s += ",";
+		}
+	}
+	s += "],";
+	client.println(s);
+
+	s = "y:[";
+	for (i = 0; i < vDataArrayIdx; i++) {
+		if (aData[i] != CONST_INVALID_TEMP) {
+			s += printTenth(aData[i]);
+			s += ",";
+		}
+	}
+	s += "],";
+	client.println(s);
+}
+
 // Plotly data output
 void printPlotlyTable(WiFiClient &client)
 {
 	int i;
-	const uint32_t timeitv = MEAS_INTERVAL * 1000/3600;
 	String s;
 	client.println("<!-- Load plotly.js into the DOM -->");
 	client.println("<script src='https://cdn.plot.ly/plotly-latest.min.js'></script>");
@@ -189,86 +218,22 @@ void printPlotlyTable(WiFiClient &client)
  
 	// Trace 1 - Temperature over time
 	client.println("var trace1 = {");
-
-	s = "x:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printMilli(i * timeitv);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
-	s = "y:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printTenth(t0Array[i]);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
+	printTempPlotData(client, t0Array);
 	client.println("type: 'scatter'};");
 
 	// Trace 2 - Temperature over time
 	client.println("var trace2 = {");
-
-	s = "x:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printMilli(i * timeitv);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
-	s = "y:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printTenth(t1Array[i]);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
+	printTempPlotData(client, t1Array);
 	client.println("type: 'scatter'};");
 
 	// Trace 3 - Temperature over time
 	client.println("var trace3 = {");
-
-	s = "x:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printMilli(i * timeitv);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
-	s = "y:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printTenth(t2Array[i]);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
+	printTempPlotData(client, t2Array);
 	client.println("type: 'scatter'};");
 
-	// Trace 2 - Temperature over time
+	// Trace 4 - Temperature over time
 	client.println("var trace4 = {");
-
-	s = "x:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printMilli(i * timeitv);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
-	s = "y:[";
-	for (i = 0; i < vDataArrayIdx; i++) {
-		s += printTenth(t3Array[i]);
-		s += ",";
-	}
-	s += "],";
-	client.println(s);
-
+	printTempPlotData(client, t3Array);
 	client.println("type: 'scatter'};");
 
 	// Trace 1 function
@@ -505,13 +470,38 @@ void printSettingsPage(WiFiClient &client)
 }
 
 // Convert input in mV to output in 10xT
+// Thermo sensor is MF58 3950B 50K Ohm
 int convVoltageToTemp(int mV)
 {
 	float Rt, Temp;
+	
+	// If the input is out of range, use invalid temp marker
+	if (mV < 200 || mV > 2000) {
+		return CONST_INVALID_TEMP;
+	}
 
 	Rt = 50000.0 / (3300.0 / mV - 1.0);
 	Temp = 1/3950.0 * log (Rt / 50000.0);
 	Temp = 1.0/( Temp + 1.0 / (25+273)) - 273;
+
+	return (Temp * 10);
+}
+
+// Convert input in mV to output in 10xT
+// Thermo sensor is Therm Pro TP-07
+int convVoltageToTempPb7(int mV)
+{
+	float Rt, Temp, lgrt;
+
+	// If the input is out of range, use invalid temp marker
+	if (mV < 150 || mV > 3000) {
+		return CONST_INVALID_TEMP;
+	}
+
+	Rt = 50000.0 / (3300.0 / mV - 1.0);
+	lgrt = log(Rt/1000);
+	Temp = 447 - 31.1 * lgrt + 0.105 * pow(lgrt, 3);
+	Temp = Temp - 273.2;
 
 	return (Temp * 10);
 }
@@ -550,11 +540,24 @@ void updateAdcReadings()
 
 	sensorValue = analogRead(PIN_TAN2);
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
-	temp2C = convVoltageToTemp(sensorValue);
+	// Switch to low range if the value is low
+	if (sensorValue < 1000) {
+		analogSetPinAttenuation(PIN_TAN2, ADC_0db);
+		sensorValue = analogRead(PIN_TAN2);
+		sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
+		analogSetPinAttenuation(PIN_TAN2, ADC_11db);
+	}
+	temp2C = convVoltageToTempPb7(sensorValue);
 
 	sensorValue = analogRead(PIN_TAN3);
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
-	temp3C = convVoltageToTemp(sensorValue);
+	if (sensorValue < 1000) {
+		analogSetPinAttenuation(PIN_TAN3, ADC_0db);
+		sensorValue = analogRead(PIN_TAN3);
+		sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
+		analogSetPinAttenuation(PIN_TAN3, ADC_11db);
+	}
+	temp3C = convVoltageToTempPb7(sensorValue);
 }
 
 // Data capture routine
