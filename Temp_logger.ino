@@ -40,12 +40,13 @@
 // PIN config
 #define PIN_TAN0				33	   		// Thermistor, 
 #define PIN_TAN1				32    		// Thermistor,
-#define PIN_TAN2				34	   		// Thermistor, 
-#define PIN_TAN3				35    		// Thermistor,
+#define PIN_TAN2				35	   		// Thermistor, 
+#define PIN_TAN3				34    		// Thermistor,
 #define PIN_V1					33    		// Voltage, 11:1 divider
 #define PIN_CUR				34				// Current
 #define TIMER_TICK_PIN		12				// For debugging
 #define AP_MODE_PIN			15				// Go into AP mode if state is low
+#define PIN_50K_PULL			26				// VP pin
 
 // Measurement settings
 // Smallest interval is 18s as it is 5e-3h.  Anything smaller causes optimization error
@@ -88,15 +89,18 @@ int temp0C;										// Temperature in degree C*10
 int temp1C;										// Temperature in degree C*10
 int temp2C;										// Temperature in degree C*10
 int temp3C;										// Temperature in degree C*10
+int temp3_pu_1M;
+
+#define DATA_ARRAY_SIZE    10000
 
 // Battery voltage reading over time
 // Use uint16_t for data, 65V for voltage max, 65A for current max
-//uint16_t vArray[10000];						// voltage reading over time
-//uint16_t iArray[10000];						// current reading over time
-int16_t t0Array[10000];						// Temp0 reading over time
-int16_t t1Array[10000];						// Temp1 reading over time
-int16_t t2Array[10000];						// Temp2 reading over time
-int16_t t3Array[10000];						// Temp3 reading over time
+//uint16_t vArray[DATA_ARRAY_SIZE];						// voltage reading over time
+//uint16_t iArray[DATA_ARRAY_SIZE];						// current reading over time
+int16_t t0Array[DATA_ARRAY_SIZE];						// Temp0 reading over time
+int16_t t1Array[DATA_ARRAY_SIZE];						// Temp1 reading over time
+int16_t t2Array[DATA_ARRAY_SIZE];						// Temp2 reading over time
+int16_t t3Array[DATA_ARRAY_SIZE];						// Temp3 reading over time
 
 int vDataArrayIdx;							// Current head of the data array
 TaskHandle_t xDataTestHandle = NULL;	// Handle to data capture test task
@@ -195,7 +199,7 @@ void printTempPlotData(WiFiClient &client, int16_t *aData)
 			if (isDisplayHour) 
 				s += printMilli(i * timeitv);
 			else 
-				s += (i * MEAS_INTERVAL) / 60;
+				s += printMilli((i * MEAS_INTERVAL * 1000) / 60);
 			s += ",";
 		}
 	}
@@ -517,13 +521,39 @@ int convVoltageToTempPb7(int mV)
 	Temp = 447 - 31.1 * lgrt + 0.105 * pow(lgrt, 3);
 	Temp = Temp - 273.15;
 
-	/* Printout used for calibration *
+	/* Printout used for calibration */
+	/*
 	Serial.print("Vin: ");
 	Serial.println(mV);
 	Serial.print("Rt: ");
 	Serial.println(Rt);
 	Serial.print("Temp: ");
 	Serial.println(Temp); */
+
+	return (Temp * 10);
+}
+
+int convVoltageToTempPb7_pu(int mV, float pu)
+{
+	float Rt, Temp, lgrt;
+
+	// If the input is out of range, use invalid temp marker
+	if (mV < 150 || mV > 3000) {
+		return CONST_INVALID_TEMP;
+	}
+
+	Rt = pu / (3300.0 / mV - 1.0);
+	lgrt = log(Rt);
+	Temp = 447 - 31.1 * lgrt + 0.105 * pow(lgrt, 3);
+	Temp = Temp - 273.15;
+
+	/* Printout used for calibration */
+	Serial.print("Vin: ");
+	Serial.println(mV);
+	Serial.print("Rt (1M): ");
+	Serial.println(Rt);
+	Serial.print("Temp: ");
+	Serial.println(Temp); 
 
 	return (Temp * 10);
 }
@@ -563,23 +593,40 @@ void updateAdcReadings()
 	sensorValue = analogRead(PIN_TAN2);
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
 	// Switch to low range if the value is low
-	if (sensorValue < 1000) {
-		analogSetPinAttenuation(PIN_TAN2, ADC_0db);
-		sensorValue = analogRead(PIN_TAN2);
-		sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
-		analogSetPinAttenuation(PIN_TAN2, ADC_11db);
-	}
-	temp2C = convVoltageToTempPb7(sensorValue);
+	if (temp3_pu_1M == 0) {
+		if (sensorValue < 1000) {
+			analogSetPinAttenuation(PIN_TAN2, ADC_0db);
+			sensorValue = analogRead(PIN_TAN2);
+			sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
+			analogSetPinAttenuation(PIN_TAN2, ADC_11db);
+		}
+		temp2C = convVoltageToTempPb7(sensorValue);
 
-	sensorValue = analogRead(PIN_TAN3);
-	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
-	if (sensorValue < 1000) {
-		analogSetPinAttenuation(PIN_TAN3, ADC_0db);
 		sensorValue = analogRead(PIN_TAN3);
-		sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
-		analogSetPinAttenuation(PIN_TAN3, ADC_11db);
+		sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
+		if (sensorValue < 1000) {
+			analogSetPinAttenuation(PIN_TAN3, ADC_0db);
+			sensorValue = analogRead(PIN_TAN3);
+			sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
+			analogSetPinAttenuation(PIN_TAN3, ADC_11db);
+		}
+		// Switch PU on the next read
+		if (sensorValue > 2100) {
+			temp3_pu_1M = 1;
+			pinMode(PIN_50K_PULL, INPUT);
+		}
+		temp3C = convVoltageToTempPb7_pu(sensorValue, 47.62);
 	}
-	temp3C = convVoltageToTempPb7(sensorValue);
+	else {
+		sensorValue = analogRead(PIN_TAN3);
+		sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
+		if (sensorValue < 200) {
+			temp3_pu_1M = 0;
+			pinMode(PIN_50K_PULL, OUTPUT);
+			digitalWrite(PIN_50K_PULL, HIGH);
+		}
+		temp3C = convVoltageToTempPb7_pu(sensorValue, 1000.0);
+	}
 }
 
 // Data capture routine
@@ -592,6 +639,10 @@ void runSingleCheck ()
 	t2Array[vDataArrayIdx] = temp2C;
 	t3Array[vDataArrayIdx] = temp3C;
 	vDataArrayIdx++;
+
+	if (vDataArrayIdx >= DATA_ARRAY_SIZE) {
+	   runState = RUN_STATE_STOP;
+	}
 }
 
 
@@ -827,6 +878,9 @@ void setup()
 	pinMode(TIMER_TICK_PIN, OUTPUT);
 	digitalWrite(TIMER_TICK_PIN, LOW);
 	pinMode(AP_MODE_PIN, INPUT);
+	pinMode(PIN_50K_PULL, OUTPUT);
+	digitalWrite(PIN_50K_PULL, HIGH);
+	temp3_pu_1M = 0;
 
 	EEPROM.begin(EEPROM_SIZE);
 
@@ -896,6 +950,9 @@ void setup()
 	// Test variables setup
 	vDataArrayIdx = 0;
 
+	// Start capture by default
+	runState = RUN_STATE_RUN;
+
 	TaskHandle_t xHandle = NULL;
 	// Create the threads
 	xTaskCreate( webServerProcess,  /* Function */
@@ -911,6 +968,7 @@ void setup()
                 NULL,              /* Parameter */
                 tskIDLE_PRIORITY + 2,  /* Priority */
                 &xDataTestHandle );/* Task's handle. */
+
 }
 
 // Empty loop, nothing is done here, idle the task
