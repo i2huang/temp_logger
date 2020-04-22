@@ -19,6 +19,14 @@
 
 *******************************************************************************/
 
+/*
+ *  Temperature sensor note:
+ *  TAN2 have 50K and 1K pull up switching, allowing high temperature sensing
+ *       The pull up is either 50K or (50K || 1K)
+ *  TAN3 have 1M and 50K pull up switching, allowing low temperature sensing 
+ *       The pull up is either  1M or (50K || 1M)
+ */
+
 #include <WiFi.h>
 #include <EEPROM.h>
 #include "wifi_config.h"
@@ -46,7 +54,8 @@
 #define PIN_CUR				34				// Current
 #define TIMER_TICK_PIN		12				// For debugging
 #define AP_MODE_PIN			15				// Go into AP mode if state is low
-#define PIN_50K_PULL			26				// VP pin
+#define PIN_50K_PULL			26				// VP pin, used for TAN3
+#define PIN_1K_PULL			25				// VP pin, used for TAN2
 
 // Measurement settings
 // Smallest interval is 18s as it is 5e-3h.  Anything smaller causes optimization error
@@ -89,7 +98,8 @@ int temp0C;										// Temperature in degree C*10
 int temp1C;										// Temperature in degree C*10
 int temp2C;										// Temperature in degree C*10
 int temp3C;										// Temperature in degree C*10
-int temp3_pu_1M;
+int temp3_pu_1M;								// 1M pull up in use
+int temp2_pu_1K;								// 1K pull up in use
 
 #define DATA_ARRAY_SIZE    10000
 
@@ -538,7 +548,7 @@ int convVoltageToTempPb7_pu(int mV, float pu)
 	float Rt, Temp, lgrt;
 
 	// If the input is out of range, use invalid temp marker
-	if (mV < 150 || mV > 3000) {
+	if (mV < 100 || mV > 3000) {
 		return CONST_INVALID_TEMP;
 	}
 
@@ -548,12 +558,43 @@ int convVoltageToTempPb7_pu(int mV, float pu)
 	Temp = Temp - 273.15;
 
 	/* Printout used for calibration */
+	/*
 	Serial.print("Vin: ");
 	Serial.println(mV);
-	Serial.print("Rt (1M): ");
+	Serial.print("Rt: ");
 	Serial.println(Rt);
+	Serial.print("Pu: ");
+	Serial.println(pu);
 	Serial.print("Temp: ");
-	Serial.println(Temp); 
+	Serial.println(Temp); */
+
+	return (Temp * 10);
+}
+
+int convVoltageToTempTP10_pu(int mV, float pu)
+{
+	float Rt, Temp, lgrt;
+
+	// If the input is out of range, use invalid temp marker
+	if (mV < 100 || mV > 3000) {
+		return CONST_INVALID_TEMP;
+	}
+
+	Rt = pu / (3300.0 / mV - 1.0);
+	lgrt = log(Rt);
+	Temp = 433.5 - 33.2 * lgrt + 0.18 * pow(lgrt, 3);
+	Temp = Temp - 273.15;
+
+	/* Printout used for calibration */
+	/*
+	Serial.print("Vin: ");
+	Serial.println(mV);
+	Serial.print("Rt: ");
+	Serial.println(Rt);
+	Serial.print("Pu: ");
+	Serial.println(pu);
+	Serial.print("Temp: ");
+	Serial.println(Temp); */
 
 	return (Temp * 10);
 }
@@ -590,18 +631,36 @@ void updateAdcReadings()
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
 	temp1C = convVoltageToTemp(sensorValue);
 
+	
 	sensorValue = analogRead(PIN_TAN2);
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
-	// Switch to low range if the value is low
-	if (temp3_pu_1M == 0) {
-		if (sensorValue < 1000) {
-			analogSetPinAttenuation(PIN_TAN2, ADC_0db);
-			sensorValue = analogRead(PIN_TAN2);
-			sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
-			analogSetPinAttenuation(PIN_TAN2, ADC_11db);
-		}
-		temp2C = convVoltageToTempPb7(sensorValue);
 
+	// TAN2 sensor ADC sampling
+	// Switch to low range if the value is low
+	if (sensorValue < 1000) {
+		analogSetPinAttenuation(PIN_TAN2, ADC_0db);
+		sensorValue = analogRead(PIN_TAN2);
+		sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
+		analogSetPinAttenuation(PIN_TAN2, ADC_11db);
+	}
+	if (temp2_pu_1K == 0) {
+		if (sensorValue < 244) {
+			temp2_pu_1K = 1;
+			pinMode(PIN_1K_PULL, OUTPUT);
+			digitalWrite(PIN_1K_PULL, HIGH);
+		}
+		temp2C = convVoltageToTempTP10_pu(sensorValue, 50.0);
+	}
+	else {
+		if (sensorValue > 2750) {
+			temp2_pu_1K = 0;
+			pinMode(PIN_1K_PULL, INPUT);
+		}
+		temp2C = convVoltageToTempTP10_pu(sensorValue, 0.98);
+	}
+
+	// TAN3 sensor ADC sampling
+	if (temp3_pu_1M == 0) {
 		sensorValue = analogRead(PIN_TAN3);
 		sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
 		if (sensorValue < 1000) {
@@ -880,7 +939,10 @@ void setup()
 	pinMode(AP_MODE_PIN, INPUT);
 	pinMode(PIN_50K_PULL, OUTPUT);
 	digitalWrite(PIN_50K_PULL, HIGH);
+	pinMode(PIN_1K_PULL, INPUT);
+	digitalWrite(PIN_1K_PULL, HIGH);
 	temp3_pu_1M = 0;
+	temp2_pu_1K = 0;
 
 	EEPROM.begin(EEPROM_SIZE);
 
