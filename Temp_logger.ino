@@ -53,7 +53,8 @@
 #define PIN_V1					33    		// Voltage, 11:1 divider
 #define PIN_CUR				34				// Current
 #define TIMER_TICK_PIN		12				// For debugging
-#define AP_MODE_PIN			15				// Go into AP mode if state is low
+//#define AP_MODE_PIN			15				// Go into AP mode if state is low
+#define AP_MODE_PIN			4				// Go into AP mode if state is low
 #define PIN_50K_PULL			26				// VP pin, used for TAN3
 #define PIN_1K_PULL			25				// VP pin, used for TAN2
 
@@ -80,6 +81,7 @@
 // Wifi network credentials
 char Wifissid[20];
 char Wifipassword[20];
+IPAddress WifiIPaddr;
 
 // Web server port number 
 WiFiServer server(80);
@@ -470,7 +472,13 @@ void printSettingsPage(WiFiClient &client)
 	client.print("WiFi Password:  <input type='text' name='wifipassSet'");
 	client.println("'> <br>");
 
-	client.println("<input type='submit' value='Update WiFi Settings'>");
+	client.println("<input type='submit' value='Update WiFi Settings'> <br>");
+	client.println("</form>");
+	client.println("<br>");
+
+	client.println("<form action='/wifitest' method='post'> <br> Device IP: ");
+	client.print(WifiIPaddr);
+	client.println("<br><input type='submit' value='Test WiFi client connection'> <br>");
 	client.println("</form>");
 	client.println("<br>");
 	client.println("<br>");
@@ -723,9 +731,11 @@ void processUrlCommands(String &header)
 
 		for (i=0;i<WIFI_SSID_SIZE;i++) {
 			 EEPROM.write(i + WIFI_SSID_OFFSET, s.charAt(i));
+		    Wifissid[i] = s.charAt(i);
 			 if (s.charAt(i) == 0) break;
 		}
 	}
+
 
 	// idxWifipass
 	if (idxWifipass >= 0) {
@@ -738,6 +748,7 @@ void processUrlCommands(String &header)
 		// Remember the Wifi information
 		for (i=0;i<WIFI_PASS_SIZE;i++) {
 			 EEPROM.write(i + WIFI_PASS_OFFSET, s.charAt(i));
+			 Wifipassword[i] = s.charAt(i);
 			 if (s.charAt(i) == 0) break;
 		}
 #ifdef USE_CONFIG_UI_WIFI
@@ -853,12 +864,17 @@ void webServerProcess(void *id)
 						int idxStatusHtml = header.indexOf("status"); 
 						int idxConfigHtml = header.indexOf("config"); 
 						int idxCsvHtml = header.indexOf("csv"); 
-						int idxPOST = header.indexOf("POST"); 
+						int idxPOST = header.indexOf("POST /config"); 
+						int idxPOSTtest = header.indexOf("POST /wifitest"); 
 						int idxGET = header.indexOf("GET"); 
 						if (idxPOST == 0) {
 							// Message is POST, print response and capture commands
 							printPostResponse(client);
 							processUrlCommands(postmsg);
+						}
+						else if (idxPOSTtest == 0) {
+							// Test the WiFi client connection
+							testWiFiClient();
 						}
 						else if (idxGET == 0) {
 							if (idxConfigHtml >= 0) {
@@ -929,6 +945,41 @@ void dataTestProcess(void *id)
 	}
 }
 
+// Test WiFi Client mode and switch back to AP mode
+void testWiFiClient()
+{
+	Serial.print("Disconnecting... ");
+	WiFi.disconnect();
+
+	Serial.print("Connecting to ");
+	Serial.println(Wifissid);
+
+	WiFi.begin(Wifissid, Wifipassword);
+	while (WiFi.status() != WL_CONNECTED) {
+	  delay(500);
+	  Serial.print(".");
+	}
+
+	Serial.println("");
+	Serial.println("WiFi connected.");
+	Serial.println("IP address: ");
+	WifiIPaddr = WiFi.localIP();
+	Serial.println(WifiIPaddr );
+	
+	Serial.print("Disconnecting... ");
+	WiFi.disconnect();
+
+	// Soft AP mode
+	WiFi.mode(WIFI_AP);
+	Serial.print("Setting up AP ");
+	Serial.println(DEFAULT_WIFIAP_SSID);
+	WiFi.softAP(DEFAULT_WIFIAP_SSID, DEFAULT_WIFIAP_PASSWD);
+	Serial.println("IP address: ");
+	Serial.println(WiFi.softAPIP());
+
+	server.begin();
+}
+
 // ********************************************
 void setup() 
 {
@@ -987,11 +1038,13 @@ void setup()
 		Serial.println("");
 		Serial.println("WiFi connected.");
 		Serial.println("IP address: ");
-		Serial.println(WiFi.localIP());
+		WifiIPaddr = WiFi.localIP();
+		Serial.println(WifiIPaddr );
+		
 	} else {
 		// Soft AP mode
 		WiFi.mode(WIFI_AP);
-		Serial.print("Setting up AP");
+		Serial.print("Setting up AP ");
 		Serial.println(DEFAULT_WIFIAP_SSID);
 		WiFi.softAP(DEFAULT_WIFIAP_SSID, DEFAULT_WIFIAP_PASSWD);
 		Serial.println("IP address: ");

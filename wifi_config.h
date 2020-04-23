@@ -16,8 +16,8 @@
 
 *******************************************************************************/
 
-#define DEFAULT_WIFIAP_SSID      "BattTester"
-#define DEFAULT_WIFIAP_PASSWD    "Batteries"
+#define DEFAULT_WIFIAP_SSID      "TempLogger"
+#define DEFAULT_WIFIAP_PASSWD    "TempLogger"
 
 // Uncomment the following define if you want to force the WiFi information
 // to be set at every boot up
