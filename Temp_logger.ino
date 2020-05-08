@@ -50,13 +50,24 @@
 #define PIN_TAN1				32    		// Thermistor,
 #define PIN_TAN2				35	   		// Thermistor, 
 #define PIN_TAN3				34    		// Thermistor,
-#define PIN_V1					33    		// Voltage, 11:1 divider
-#define PIN_CUR				34				// Current
+
 #define TIMER_TICK_PIN		12				// For debugging
-//#define AP_MODE_PIN			15				// Go into AP mode if state is low
+
+#ifdef REV1_HW
 #define AP_MODE_PIN			4				// Go into AP mode if state is low
-#define PIN_50K_PULL			26				// VP pin, used for TAN3
-#define PIN_1K_PULL			25				// VP pin, used for TAN2
+#define PIN_A3_1K_PULL		14				// Pull pin, used for TAN3
+#define PIN_A3_50K_PULL		26				// Pull pin, used for TAN3
+#define PIN_A2_1K_PULL		25				// Pull pin, used for TAN2
+#define PIN_A2_50K_PULL		27				// Pull pin, used for TAN2
+#else
+#define AP_MODE_PIN			15				// Go into AP mode if state is low
+#define PIN_A2_1K_PULL		14				// Pull pin, used for TAN3
+#define PIN_A2_50K_PULL		27				// Pull pin, used for TAN3
+#define PIN_A3_1K_PULL		26				// Pull pin, used for TAN2
+#define PIN_A3_50K_PULL		25				// Pull pin, used for TAN2
+#endif
+
+
 
 // Measurement settings
 // Smallest interval is 18s as it is 5e-3h.  Anything smaller causes optimization error
@@ -69,13 +80,16 @@
 #define RUN_STATE_CLEAR		3				// Not a state, just a UI switch
 
 // EEPROM layout
-#define EEPROM_SIZE			40
+#define EEPROM_SIZE			45
 #define WIFI_SSID_OFFSET   0
 #define WIFI_SSID_SIZE     20
 #define WIFI_PASS_OFFSET   20
 #define WIFI_PASS_SIZE     20
+#define CONFIG_UNIT_OFFSET 40				// Unit used in measurement, 0x01 = F instead of C
 
 #define CONST_INVALID_TEMP -5000			// -500C, not a valid temperature range
+
+#define CONFIG_USE_UNIT_F  0x01
 
 // ********************************************
 // Wifi network credentials
@@ -91,7 +105,8 @@ WiFiServer server(80);
 int TimeTick = 0;								// Time tick in seconds
 int TimeReadTick = 0;						// Ticks till next reading
 int runState = 0;								// Start the test
-int AvgDischargeMa;							// Discharge current average
+int ThermoUnit;								// Temperature used, 0x01 = F
+int AutoRefreshTime = 60;					// Auto refresh time in S
 
 // Current ADC readings
 int vSense;										// Voltage in mV
@@ -100,8 +115,8 @@ int temp0C;										// Temperature in degree C*10
 int temp1C;										// Temperature in degree C*10
 int temp2C;										// Temperature in degree C*10
 int temp3C;										// Temperature in degree C*10
-int temp3_pu_1M;								// 1M pull up in use
-int temp2_pu_1K;								// 1K pull up in use
+int temp3_pu;									// 1 = 1K, 50 = 50K, 1000 = 1M
+int temp2_pu;									// 
 
 #define DATA_ARRAY_SIZE    10000
 
@@ -197,6 +212,17 @@ char *printTenth(int16_t in)
 	return outbuf;
 }
 
+// Convert to F if needed
+int16_t tempUnitConversion(int16_t t_in)
+{
+	if (ThermoUnit != CONFIG_USE_UNIT_F) {
+		return t_in;
+	}
+	else {
+		return t_in * 9 / 5 + 320;
+	}
+}
+
 void printTempPlotData(WiFiClient &client, int16_t *aData)
 {
 	int i;
@@ -221,7 +247,7 @@ void printTempPlotData(WiFiClient &client, int16_t *aData)
 	s = "y:[";
 	for (i = 0; i < vDataArrayIdx; i++) {
 		if (aData[i] != CONST_INVALID_TEMP) {
-			s += printTenth(aData[i]);
+			s += printTenth(tempUnitConversion(aData[i]));
 			s += ",";
 		}
 	}
@@ -273,7 +299,11 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("      zeroline: false");
 	client.println("    },");
 	client.println("    yaxis: {");
-	client.println("    title: 'Temperature (C)',");
+	if (ThermoUnit != CONFIG_USE_UNIT_F) {
+		client.println("    title: 'Temperature (C)',");
+	} else {
+		client.println("    title: 'Temperature (F)',");
+	}
 	client.println("  }};");
 	client.println("  Plotly.newPlot('tempDiv', data, layout);");
 	client.println("}");
@@ -291,7 +321,11 @@ void printPlotlyTable(WiFiClient &client)
 	client.println("      zeroline: false");
 	client.println("    },");
 	client.println("    yaxis: {");
-	client.println("    title: 'Temperature (C)',");
+	if (ThermoUnit != CONFIG_USE_UNIT_F) {
+		client.println("    title: 'Temperature (C)',");
+	} else {
+		client.println("    title: 'Temperature (F)',");
+	}
 	client.println("  }};");
 	client.println("  Plotly.newPlot('atempDiv', data, layout);");
 	client.println("} </script>");
@@ -306,13 +340,13 @@ void printCsvData(WiFiClient &client)
 		String s = "";
 		s += (i * MEAS_INTERVAL);
 		s += ",";
-		s += printTenth(t0Array[i]);
+		s += printTenth(tempUnitConversion(t0Array[i]));
 		s += ",";
-		s += printTenth(t1Array[i]);
+		s += printTenth(tempUnitConversion(t1Array[i]));
 		s += ",";
-		s += printTenth(t2Array[i]);
+		s += printTenth(tempUnitConversion(t2Array[i]));
 		s += ",";
-		s += printTenth(t3Array[i]);
+		s += printTenth(tempUnitConversion(t3Array[i]));
 		client.println(s);
 	}
 }
@@ -351,6 +385,12 @@ void printHomePage(WiFiClient &client)
 	client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
 	client.println("</style>");
 
+	if (AutoRefreshTime != 0) {
+		client.print("<meta http-equiv=\"refresh\" content=\"");
+		client.print(AutoRefreshTime);
+		client.println("\">");
+	}
+
 	printPlotlyTable(client);
 	client.println("</head>");
 	
@@ -372,18 +412,34 @@ void printHomePage(WiFiClient &client)
 	}
 	client.println("<br>");
 
-	client.print("Current Temperature Reading (T0): ");
-	client.print(printTenth(temp0C));
-	client.println(" C <br>");
-	client.print("Current Temperature Reading (T1): ");
-	client.print(printTenth(temp1C));
-	client.println(" C <br>");
-	client.print("Current Temperature Reading (T2): ");
-	client.print(printTenth(temp2C));
-	client.println(" C <br>");
-	client.print("Current Temperature Reading (T3): ");
-	client.print(printTenth(temp3C));
-	client.println(" C <br>");
+	if (ThermoUnit != CONFIG_USE_UNIT_F) {
+		client.print("Current Temperature Reading (T0): ");
+		client.print(printTenth(temp0C));
+		client.println(" C <br>");
+		client.print("Current Temperature Reading (T1): ");
+		client.print(printTenth(temp1C));
+		client.println(" C <br>");
+		client.print("Current Temperature Reading (T2): ");
+		client.print(printTenth(temp2C));
+		client.println(" C <br>");
+		client.print("Current Temperature Reading (T3): ");
+		client.print(printTenth(temp3C));
+		client.println(" C <br>");
+	} 
+	else {
+		client.print("Current Temperature Reading (T0): ");
+		client.print(printTenth(tempUnitConversion(temp0C)));
+		client.println(" F <br>");
+		client.print("Current Temperature Reading (T1): ");
+		client.print(printTenth(tempUnitConversion(temp1C)));
+		client.println(" F <br>");
+		client.print("Current Temperature Reading (T2): ");
+		client.print(printTenth(tempUnitConversion(temp2C)));
+		client.println(" F <br>");
+		client.print("Current Temperature Reading (T3): ");
+		client.print(printTenth(tempUnitConversion(temp3C)));
+		client.println(" F <br>");
+	}
 
 	// Plot the output
 	client.println("<div id='tempDiv'><script>plot_tempDiv()</script></div>");
@@ -485,6 +541,19 @@ void printSettingsPage(WiFiClient &client)
 
 	client.println("<form action='/config' method='post'>");
 
+	client.print("Status page auto-refresh:  <input type='text' name='refreshTSet' value='");
+	client.print(AutoRefreshTime);
+	client.println("'> S<br>");
+
+	client.println("Temperature Unit: <br>");
+	if (ThermoUnit != CONFIG_USE_UNIT_F) {
+		client.println("<input type='radio' name='tempUnitSet' value='0' checked> C <br>");
+		client.println("<input type='radio' name='tempUnitSet' value='1'> F <br>");
+	} else {
+		client.println("<input type='radio' name='tempUnitSet' value='0'> C <br>");
+		client.println("<input type='radio' name='tempUnitSet' value='1' checked> F <br>");
+	}
+
 	client.println("Run State: <br>");
 	if (runState == RUN_STATE_STOP || runState == RUN_STATE_END) {
 		client.println("<input type='radio' name='runStartSet' value='0' checked> Stopped<br>");
@@ -497,7 +566,7 @@ void printSettingsPage(WiFiClient &client)
 		client.println("<input type='radio' name='runStartSet' value='1'> Run capture<br>");
 	}
 	client.println("<input type='radio' name='runStartSet' value='3' > Reset<br>");
-	client.println("<input type='submit' value='Set run state'>");
+	client.println("<input type='submit' value='Set configuration'>");
 	client.println("</form>");
 	client.println("</body></html>");
 	
@@ -594,7 +663,7 @@ int convVoltageToTempTP10_pu(int mV, float pu)
 	Temp = Temp - 273.15;
 
 	/* Printout used for calibration */
-	/*
+	
 	Serial.print("Vin: ");
 	Serial.println(mV);
 	Serial.print("Rt: ");
@@ -602,7 +671,7 @@ int convVoltageToTempTP10_pu(int mV, float pu)
 	Serial.print("Pu: ");
 	Serial.println(pu);
 	Serial.print("Temp: ");
-	Serial.println(Temp); */
+	Serial.println(Temp); 
 
 	return (Temp * 10);
 }
@@ -611,25 +680,8 @@ int convVoltageToTempTP10_pu(int mV, float pu)
 void updateAdcReadings() 
 {
 	int sensorValue;
-#if 0
-	analogSetPinAttenuation(PIN_V1, ADC_0db);
-	analogSetPinAttenuation(PIN_CUR, ADC_6db);
-	sensorValue = analogRead(PIN_V1);
-	sensorValue += analogRead(PIN_V1);
-	sensorValue += analogRead(PIN_V1);
-	sensorValue += analogRead(PIN_V1);
-	sensorValue /= 4;
-	sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
-	iSense = sensorValue;
-
-	sensorValue = analogRead(PIN_CUR);
-	sensorValue += analogRead(PIN_CUR);
-	sensorValue += analogRead(PIN_CUR);
-	sensorValue += analogRead(PIN_CUR);
-	sensorValue /= 4;
-	vSense = sensorValue * 1000 / ADC_6DB_VAR_B + ADC_6DB_VAR_A;
-	vSense = vSense * 11;							// divider ratio
-#endif
+	int sensorValue_TAN2;
+	int sensorValue_TAN3;
 
 	sensorValue = analogRead(PIN_TAN0);						
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
@@ -639,61 +691,133 @@ void updateAdcReadings()
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
 	temp1C = convVoltageToTemp(sensorValue);
 
-	
+	// TAN2 sensor ADC sampling
 	sensorValue = analogRead(PIN_TAN2);
 	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
 
-	// TAN2 sensor ADC sampling
-	// Switch to low range if the value is low
 	if (sensorValue < 1000) {
+		// Switch to low range if the value is low
 		analogSetPinAttenuation(PIN_TAN2, ADC_0db);
 		sensorValue = analogRead(PIN_TAN2);
 		sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
 		analogSetPinAttenuation(PIN_TAN2, ADC_11db);
 	}
-	if (temp2_pu_1K == 0) {
-		if (sensorValue < 244) {
-			temp2_pu_1K = 1;
-			pinMode(PIN_1K_PULL, OUTPUT);
-			digitalWrite(PIN_1K_PULL, HIGH);
-		}
-		temp2C = convVoltageToTempTP10_pu(sensorValue, 50.0);
-	}
-	else {
-		if (sensorValue > 2750) {
-			temp2_pu_1K = 0;
-			pinMode(PIN_1K_PULL, INPUT);
-		}
-		temp2C = convVoltageToTempTP10_pu(sensorValue, 0.98);
-	}
+	sensorValue_TAN2 = sensorValue;
 
 	// TAN3 sensor ADC sampling
-	if (temp3_pu_1M == 0) {
+	sensorValue = analogRead(PIN_TAN3);
+	sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
+
+	if (sensorValue < 1000) {
+		analogSetPinAttenuation(PIN_TAN3, ADC_0db);
 		sensorValue = analogRead(PIN_TAN3);
-		sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
-		if (sensorValue < 1000) {
-			analogSetPinAttenuation(PIN_TAN3, ADC_0db);
-			sensorValue = analogRead(PIN_TAN3);
-			sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
-			analogSetPinAttenuation(PIN_TAN3, ADC_11db);
+		sensorValue = sensorValue * 1000 / ADC_0DB_VAR_B + ADC_0DB_VAR_A;
+		analogSetPinAttenuation(PIN_TAN3, ADC_11db);
+	}
+	sensorValue_TAN3 = sensorValue;
+
+#ifdef REV1_HW
+	sensorValue = sensorValue_TAN2;
+	if (temp2_pu == 50) {
+		temp2C = convVoltageToTempTP10_pu(sensorValue, 50.0);
+		if (sensorValue < 244) {
+			temp2_pu = 1;
+			pinMode(PIN_A2_1K_PULL, OUTPUT);
+			digitalWrite(PIN_A2_1K_PULL, HIGH);
 		}
-		// Switch PU on the next read
-		if (sensorValue > 2100) {
-			temp3_pu_1M = 1;
-			pinMode(PIN_50K_PULL, INPUT);
-		}
-		temp3C = convVoltageToTempPb7_pu(sensorValue, 47.62);
 	}
 	else {
-		sensorValue = analogRead(PIN_TAN3);
-		sensorValue = sensorValue * 1000 / ADC_11DB_VAR_B + ADC_11DB_VAR_A;
-		if (sensorValue < 200) {
-			temp3_pu_1M = 0;
-			pinMode(PIN_50K_PULL, OUTPUT);
-			digitalWrite(PIN_50K_PULL, HIGH);
+		temp2C = convVoltageToTempTP10_pu(sensorValue, 0.98);
+		if (sensorValue > 2750) {
+			temp2_pu = 50;
+			pinMode(PIN_A2_1K_PULL, INPUT);
 		}
-		temp3C = convVoltageToTempPb7_pu(sensorValue, 1000.0);
 	}
+
+	sensorValue = sensorValue_TAN3;
+	if (temp3_pu == 50) {
+		temp3C = convVoltageToTempPb7_pu(sensorValue, 47.62);
+		// Switch PU on the next read
+		if (sensorValue > 2100) {
+			temp3_pu = 1000;
+			pinMode(PIN_A3_50K_PULL, INPUT);
+		}
+	}
+	else {
+		temp3C = convVoltageToTempPb7_pu(sensorValue, 1000.0);
+		if (sensorValue < 200) {
+			temp3_pu = 50;
+			pinMode(PIN_A3_50K_PULL, OUTPUT);
+			digitalWrite(PIN_A3_50K_PULL, HIGH);
+		}
+	}
+#else
+	// Channel TAN2
+	sensorValue = sensorValue_TAN2;
+	if (temp2_pu == 50) {
+		// 50K
+		temp2C = convVoltageToTempTP10_pu(sensorValue, 50.0);
+		if (sensorValue < 244) {
+			temp2_pu = 1;
+			pinMode(PIN_A2_1K_PULL, OUTPUT);
+			digitalWrite(PIN_A2_1K_PULL, HIGH);
+		}
+		else if (sensorValue > 2100) {
+			temp2_pu = 1000;
+			pinMode(PIN_A2_50K_PULL, INPUT);
+		}
+	}
+	else if (temp2_pu == 1000) {
+		// 1M
+		temp2C = convVoltageToTempTP10_pu(sensorValue, 1000.0);
+		if (sensorValue < 200) {
+			temp2_pu = 50;
+			pinMode(PIN_A2_50K_PULL, OUTPUT);
+			digitalWrite(PIN_A2_50K_PULL, HIGH);
+		}
+	}
+	else {
+		// 1K
+		temp2C = convVoltageToTempTP10_pu(sensorValue, 0.98);
+		if (sensorValue > 2750) {
+			temp2_pu = 50;
+			pinMode(PIN_A2_1K_PULL, INPUT);
+		}
+	}
+
+	// Channel TAN3
+	sensorValue = sensorValue_TAN3;
+	if (temp3_pu == 50) {
+		// 50K
+		temp3C = convVoltageToTempTP10_pu(sensorValue, 50.0);
+		if (sensorValue < 244) {
+			temp3_pu = 1;
+			pinMode(PIN_A3_1K_PULL, OUTPUT);
+			digitalWrite(PIN_A3_1K_PULL, HIGH);
+		}
+		else if (sensorValue > 2100) {
+			temp3_pu = 1000;
+			pinMode(PIN_A3_50K_PULL, INPUT);
+		}
+	}
+	else if (temp3_pu == 1000) {
+		// 1M
+		temp3C = convVoltageToTempTP10_pu(sensorValue, 1000.0);
+		if (sensorValue < 200) {
+			temp3_pu = 50;
+			pinMode(PIN_A3_50K_PULL, OUTPUT);
+			digitalWrite(PIN_A3_50K_PULL, HIGH);
+		}
+	}
+	else {
+		// 1K
+		temp3C = convVoltageToTempTP10_pu(sensorValue, 0.98);
+		if (sensorValue > 2750) {
+			temp3_pu = 50;
+			pinMode(PIN_A3_1K_PULL, INPUT);
+		}
+	}
+#endif
 }
 
 // Data capture routine
@@ -719,6 +843,8 @@ void processUrlCommands(String &header)
 	int idxRunStart = header.indexOf("runStartSet=");
 	int idxWifissid = header.indexOf("ssidSet=");
 	int idxWifipass = header.indexOf("wifipassSet=");
+	int idxTempUnit = header.indexOf("tempUnitSet=");
+	int idxRefreshT = header.indexOf("refreshTSet=");
 
 	// Process the form data and update internal variables
 	// idxWifissid
@@ -768,7 +894,6 @@ void processUrlCommands(String &header)
 			portENTER_CRITICAL_ISR(&timerMux);
 			timetickCounter = 0;
 			portEXIT_CRITICAL_ISR(&timerMux);
-			AvgDischargeMa = -1;
 			vDataArrayIdx = 0;
 			runState = RUN_STATE_STOP;
 		}
@@ -781,6 +906,28 @@ void processUrlCommands(String &header)
 		runState = newRunStart;
 		Serial.print("runStart ");
 		Serial.println(runState);
+	}
+
+	if (idxTempUnit >= 0) {
+		String s = header.substring(idxTempUnit + 12, idxTempUnit + 12 + 2);
+		int newTempUnit = s.charAt(0) == '1' ? 1 : 0;
+		Serial.print("runTempUnit ");
+		Serial.println(newTempUnit);
+		if (newTempUnit != ThermoUnit) {
+			ThermoUnit = newTempUnit;
+			EEPROM.write(CONFIG_UNIT_OFFSET, ThermoUnit);
+		   EEPROM.commit();
+		}
+	}
+
+	if (idxRefreshT >= 0) {
+		String s = header.substring(idxRefreshT + 12, idxRefreshT + 12 + 3);
+		int newRefreshT = s.toInt();
+		Serial.print("New Refresh Time: ");
+		Serial.println(newRefreshT);
+		if (newRefreshT < 900 && newRefreshT >= 0) {
+			AutoRefreshTime = newRefreshT;
+		}
 	}
 }
 
@@ -964,7 +1111,7 @@ void testWiFiClient()
 	Serial.println("WiFi connected.");
 	Serial.println("IP address: ");
 	WifiIPaddr = WiFi.localIP();
-	Serial.println(WifiIPaddr );
+	Serial.println(WifiIPaddr);
 	
 	Serial.print("Disconnecting... ");
 	WiFi.disconnect();
@@ -988,12 +1135,19 @@ void setup()
 	pinMode(TIMER_TICK_PIN, OUTPUT);
 	digitalWrite(TIMER_TICK_PIN, LOW);
 	pinMode(AP_MODE_PIN, INPUT);
-	pinMode(PIN_50K_PULL, OUTPUT);
-	digitalWrite(PIN_50K_PULL, HIGH);
-	pinMode(PIN_1K_PULL, INPUT);
-	digitalWrite(PIN_1K_PULL, HIGH);
-	temp3_pu_1M = 0;
-	temp2_pu_1K = 0;
+
+	pinMode(PIN_A2_50K_PULL, OUTPUT);
+	digitalWrite(PIN_A2_50K_PULL, HIGH);
+	pinMode(PIN_A2_1K_PULL, INPUT);
+	digitalWrite(PIN_A2_1K_PULL, HIGH);
+
+	pinMode(PIN_A3_50K_PULL, OUTPUT);
+	digitalWrite(PIN_A3_50K_PULL, HIGH);
+	pinMode(PIN_A3_1K_PULL, INPUT);
+	digitalWrite(PIN_A3_1K_PULL, HIGH);
+
+	temp3_pu = 50;
+	temp2_pu = 50;
 
 	EEPROM.begin(EEPROM_SIZE);
 
@@ -1022,7 +1176,11 @@ void setup()
 	for (i=0;i<WIFI_PASS_SIZE;i++) {
 		 Wifipassword[i] = EEPROM.read(i + WIFI_PASS_OFFSET);
 	}
+
+	// Recall unit used
+	ThermoUnit = EEPROM.read(CONFIG_UNIT_OFFSET);
 	
+	// Check to see if Wifi need to go into AP mode
 	wifiApMode = !(digitalRead(AP_MODE_PIN));
 	if (!wifiApMode) {
 		// Connect to Wi-Fi network with SSID and password
