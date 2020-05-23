@@ -719,7 +719,7 @@ void updateAdcReadings()
 #ifdef REV1_HW
 	sensorValue = sensorValue_TAN2;
 	if (temp2_pu == 50) {
-		temp2C = convVoltageToTempTP10_pu(sensorValue, 50.0);
+		temp2C = convVoltageToTempPb7_pu(sensorValue, 50.0);
 		if (sensorValue < 244) {
 			temp2_pu = 1;
 			pinMode(PIN_A2_1K_PULL, OUTPUT);
@@ -727,7 +727,7 @@ void updateAdcReadings()
 		}
 	}
 	else {
-		temp2C = convVoltageToTempTP10_pu(sensorValue, 0.98);
+		temp2C = convVoltageToTempPb7_pu(sensorValue, 0.98);
 		if (sensorValue > 2750) {
 			temp2_pu = 50;
 			pinMode(PIN_A2_1K_PULL, INPUT);
@@ -836,6 +836,39 @@ void runSingleCheck ()
 	}
 }
 
+char ascii2hex(char in)
+{
+	if (in >= 0x30 && in < 0x39) 
+		return (in - 0x30);
+	if (in >= 0x41 && in < 0x46) 
+		return (in - 0x41 + 10);
+	if (in >= 0x61 && in < 0x66) 
+		return (in - 0x61 + 10);
+	return 0;
+}
+
+// Special characters in HTML URL encoding
+String replaceHtmlFormEscapeChar(String str)
+{
+	int i;
+
+	// Replace all '+' with ' '
+	str.replace("+"," ");
+	
+	for (i=0;;i++)
+	{
+		char c = str.charAt(i);
+		if (c == 0) break;
+		else if (c == '%') {
+			char d;
+			d = ascii2hex(str.charAt(i+1)) * 16;
+			d += ascii2hex(str.charAt(i+2));
+			str.setCharAt(i, d);
+			str.remove(i+1, 2);
+		}
+	}
+	return str;
+}
 
 // HTTP URL command processor
 void processUrlCommands(String &header)
@@ -852,6 +885,7 @@ void processUrlCommands(String &header)
 		String s = header.substring(idxWifissid + 8, idxWifissid + 8 + 20);
 		int i = s.indexOf("&");
 		s = s.substring(0, i);
+		s = replaceHtmlFormEscapeChar(s);
 		Serial.print("Wifi SSID set ");
 		Serial.println(s);
 
@@ -868,6 +902,7 @@ void processUrlCommands(String &header)
 		String s = header.substring(idxWifipass + 12, idxWifipass + 12 + 20);
 		int i = s.indexOf(" ");
 		s = s.substring(0, i);
+		s = replaceHtmlFormEscapeChar(s);
 		Serial.print("Wifi PASSWD set ");
 		Serial.println(s);
 
