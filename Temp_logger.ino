@@ -54,7 +54,7 @@
 #define TIMER_TICK_PIN		12				// For debugging
 
 #ifdef REV1_HW
-#define AP_MODE_PIN			4				// Go into AP mode if state is low
+#define AP_MODE_PIN			15				// Go into AP mode if state is low
 #define PIN_A3_1K_PULL		14				// Pull pin, used for TAN3
 #define PIN_A3_50K_PULL		26				// Pull pin, used for TAN3
 #define PIN_A2_1K_PULL		25				// Pull pin, used for TAN2
@@ -1101,6 +1101,7 @@ void testWiFiClient()
 	Serial.print("Connecting to ");
 	Serial.println(Wifissid);
 
+   WiFi.mode(WIFI_STA);
 	WiFi.begin(Wifissid, Wifipassword);
 	while (WiFi.status() != WL_CONNECTED) {
 	  delay(500);
@@ -1187,7 +1188,10 @@ void setup()
 		Serial.print("Connecting to ");
 		Serial.println(Wifissid);
 
+      WiFi.mode(WIFI_STA);
+		WiFi.setHostname("WTherm");
 		WiFi.begin(Wifissid, Wifipassword);
+
 		while (WiFi.status() != WL_CONNECTED) {
 		  delay(500);
 		  Serial.print(".");
